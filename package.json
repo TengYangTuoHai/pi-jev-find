@@ -1,6 +1,6 @@
 {
 	"name": "pi-jev-find",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Semantic find tool for the pi coding agent and the DeepSeek Harness — a cascade-search port of jegrep / oh-my-pi jfind",
 	"type": "module",
 	"license": "MIT",
