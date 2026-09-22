@@ -1,6 +1,6 @@
 {
 	"name": "pi-jev-find",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Semantic find tool for the pi coding agent — a cascade-search port of jegrep / oh-my-pi jfind",
 	"type": "module",
 	"license": "MIT",
@@ -37,6 +37,8 @@
 		"typescript": "^5.9.0"
 	},
 	"pi": {
-		"extensions": ["src/index.ts"]
+		"extensions": [
+			"src/index.ts"
+		]
 	}
 }
