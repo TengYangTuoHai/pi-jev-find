@@ -42,6 +42,8 @@ All knobs are environment variables; all are optional except the API key.
 | `JEV_BASE_URL` | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | API root. |
 | `JEV_MODEL` | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | Judgment model. |
 
+The `find` tool is only offered to the model when a key resolves at startup; without one, pi-jev-find logs a warning and skips tool registration entirely (`/find` remains available as a status check). A listed-but-broken tool burns one failed call and teaches the model to avoid `find` for the rest of the session.
+
 ### Cascade budgets
 
 | Variable | Default | Meaning |

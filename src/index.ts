@@ -30,22 +30,29 @@ const parameters = Type.Object({
 	path: Type.Optional(Type.String({ description: "directory to search. Omitted -> the workspace root" })),
 });
 
-const DESCRIPTION = `Semantic grep: describe what you are looking for in plain language; returns the files and line ranges that implement it, each with a calibrated 0-1 relevance score. No index; searches the live workspace tree on every call.
+const DESCRIPTION = `Semantic code search: describe what you want in plain language, get the files and exact line ranges that implement it, each with a calibrated 0-1 probability. No index; searches the live workspace tree on every call. A typical find takes a few seconds and costs a fraction of a cent.
 
-- \`query\`: a concept or behavior ("where do we verify JWT tokens?", "retry budget for failed requests"), not a regex. Quoted phrases in \`query\` are matched whole.
-- \`grep_keywords\`: identifiers, symbols, or terms likely to appear verbatim in matching source; they steer the lexical pre-ranking. Pass \`[]\` when nothing specific comes to mind.
+WHEN TO USE (instead of grep):
+- The words you'd use may NOT match the code's identifiers ("where do we expire sessions?" when the code says \`sess_ttl\`), or you don't know this codebase yet.
+- One or two greps already missed or returned noise, and you would otherwise open many speculative files.
+Do NOT use it for exact strings, regexes, or known symbols (that is grep/\`ffgrep\` territory), nor for file names (\`fffind\`/glob) — those are cheaper and faster.
+
+USAGE
+- \`query\`: a concept or behavior ("where do we verify webhook signatures?", "retry budget for failed requests"), not a regex. Quoted phrases in \`query\` are matched whole.
+- \`grep_keywords\`: identifiers or terms likely to appear verbatim in matching source; they steer lexical pre-ranking. Pass \`[]\` when nothing specific comes to mind.
 - \`path\`: one directory to search; omit for the workspace root. Narrow it when you already know the subsystem.
-- Results are strongest first as \`path:start-end score snippet\`; open ranges with \`read\`.
-- Scores are absolute yes/no probabilities: comparable across calls; below ~0.4 is weak evidence, so widen the query or fall back to \`grep\` before concluding absence.
-- \`grep\` is for exact strings, regexes, and known symbols; \`glob\` is for file names. Reach for them after \`find\` has narrowed the files, or when the target is literally a string.
-- Every call spends judge requests over the search scope; batch related questions into one descriptive \`query\` instead of many narrow calls.`;
+
+RESULTS
+- Hits are strongest first as \`path:start-end score snippet\`; open the ranges with \`read\`.
+- Scores are absolute yes/no probabilities, comparable across calls; below ~0.4 is weak evidence — reword the query instead of concluding absence.
+- Batch related questions into one descriptive \`query\` rather than several narrow calls.`;
 
 const PROMPT_SNIPPET =
-	"find: semantic search — describe a behavior in plain language, get files and calibrated line ranges that implement it";
+	"find: semantic search — plain-language query in, files + calibrated line ranges out; for concept lookups, unfamiliar code, or after greps miss";
 
 const PROMPT_GUIDELINES = [
-	"When you do not already know where a behavior lives, call `find` once with a descriptive query instead of chaining guessed `grep` patterns and `glob` sweeps followed by speculative reads.",
-	"`grep` and `glob` come after `find` has narrowed the files, or when the target is an exact string or file name.",
+	"Exact strings, regexes, and known symbols belong to `ffgrep`/grep (or rg via bash); file names belong to `fffind`/glob.",
+	"When a grep missed or returned noise, or the concept's name in code may differ from your words, call `find` once with a descriptive query before reading files speculatively.",
 ];
 
 /** Line ranges shown per hit in the model-facing text, strongest first. */
@@ -126,6 +133,18 @@ export default function jfindExtension(pi: ExtensionAPI): void {
 	const config = loadConfig();
 	if (!config.enabled) return;
 
+	// Resolve the judge endpoint at startup. A listed-but-broken tool burns one
+	// failed call and then never gets picked again for the whole session — skip
+	// registration instead so the model only ever sees a working `find`.
+	let judgeReady = true;
+	try {
+		resolveJevConfig();
+	} catch (error) {
+		judgeReady = false;
+		console.error(`pi-jev-find: find tool NOT registered — ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	if (judgeReady) {
 	pi.registerTool({
 		name: "find",
 		label: "Find",
@@ -193,7 +212,9 @@ export default function jfindExtension(pi: ExtensionAPI): void {
 			return renderFindResult(details, isError, options.expanded, theme);
 		},
 	});
+	}
 
+	// Always available as a status/diagnostic command, even without a key.
 	pi.registerCommand("find", {
 		description: "pi-jev-find: show the resolved Jev judge and cascade budgets",
 		handler: async (_args, ctx) => {
