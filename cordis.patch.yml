@@ -1,0 +1,21 @@
+# The configuration layer this bundle contributes to a DeepSeek Harness profile.
+#
+# `name` is a Node module specifier, so it is resolved from the profile's own
+# installed copy of this package rather than from any checkout path. The subpath
+# points at the Node build in `lib/`, produced by `tsc -p tsconfig.build.json`
+# (`npm run build`): the pi adapter in `src/index.ts` stays the pi entry, and the
+# harness loads its own entry from the same source tree.
+#
+# A deployment that needs different budgets or a different judge endpoint
+# overrides them here:
+#
+# - insert:
+#     - id: pi-jev-find
+#       name: pi-jev-find/lib/dsh/index.js
+#       config:
+#         model: jev-v2
+#         candidates: 64
+#         timeoutMs: 60000
+- insert:
+    - id: pi-jev-find
+      name: pi-jev-find/lib/dsh/index.js

@@ -1,18 +1,33 @@
 {
 	"name": "pi-jev-find",
 	"version": "0.2.0",
-	"description": "Semantic find tool for the pi coding agent — a cascade-search port of jegrep / oh-my-pi jfind",
+	"description": "Semantic find tool for the pi coding agent and the DeepSeek Harness — a cascade-search port of jegrep / oh-my-pi jfind",
 	"type": "module",
 	"license": "MIT",
 	"main": "src/index.ts",
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"dsh": {
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		}
+	},
 	"files": [
 		"src",
+		"lib",
+		"cordis.patch.yml",
 		"LICENSE",
 		"README.md"
 	],
 	"keywords": [
 		"pi",
 		"pi-extension",
+		"deepseek-harness",
+		"dsh",
+		"dsh-plugin",
 		"semantic-search",
 		"ripgrep",
 		"jev",
@@ -24,21 +39,48 @@
 		"url": "git+https://github.com/TengYangTuoHai/pi-jev-find.git"
 	},
 	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"prepare": "tsc -p tsconfig.build.json",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@deepseek-ai/schemastery": "^3.18.2",
+		"@vscode/ripgrep": "^1.18.0",
 		"typebox": "^1.3.27"
 	},
+	"peerDependencies": {
+		"@deepseek-ai/cordis": "^4.0.2",
+		"@deepseek-ai/dsh-llm": "^0.1.5-rc.1 || ^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-tools": "^0.1.5-rc.1 || ^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-util-values": "^0.1.5-rc.1 || ^0.1.7-alpha.1"
+	},
+	"peerDependenciesMeta": {
+		"@deepseek-ai/cordis": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-llm": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-tools": {
+			"optional": true
+		},
+		"@deepseek-ai/dsh-util-values": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
+		"@deepseek-ai/cordis": "4.0.3",
+		"@deepseek-ai/dsh-agent": "^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-commands": "^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-llm": "^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-session": "^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-system-prompt": "^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-tools": "^0.1.7-alpha.1",
+		"@deepseek-ai/dsh-util-values": "^0.1.7-alpha.1",
 		"@earendil-works/pi-coding-agent": "^0.87.0",
 		"@earendil-works/pi-tui": "^0.87.0",
 		"@types/bun": "^1.3.0",
 		"typescript": "^5.9.0"
-	},
-	"pi": {
-		"extensions": [
-			"src/index.ts"
-		]
 	}
 }

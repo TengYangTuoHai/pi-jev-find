@@ -27,9 +27,19 @@ export interface JevConfig {
 	apiKey: string;
 	baseUrl: string;
 	model: string;
-	/** Which environment variable supplied the key; never the key itself. */
+	/** Where the key came from: the environment variable name, or `plugin config` for a host override. Never the key itself. */
 	keySource: string;
 }
+
+/** Host-supplied overrides; an unset field keeps its environment/default resolution. */
+export interface JevConfigOverrides {
+	apiKey?: string;
+	baseUrl?: string;
+	model?: string;
+}
+
+/** The plugin-config source label reported by {@link JevConfig.keySource}. */
+const CONFIG_KEY_SOURCE = "plugin config";
 
 function readEnv(env: Record<string, string | undefined>, name: string, fallbackName?: string): { value: string | undefined; source: string } {
 	const primary = env[name]?.trim();
@@ -41,16 +51,31 @@ function readEnv(env: Record<string, string | undefined>, name: string, fallback
 
 /**
  * Resolve the Jev endpoint from the environment. `JEV_*` names win;
- * `TYPESAFE_*` names are honored as jegrep-compatible fallbacks. Throws a
+ * `TYPESAFE_*` names are honored as jegrep-compatible fallbacks. Throw a
  * user-actionable message when no API key is configured.
+ *
+ * @param env - environment to read (defaults to the process environment).
+ * @param overrides - host configuration; a set field wins over its environment
+ * variable, so a deployment can configure the endpoint entirely through plugin
+ * config.
  */
-export function resolveJevConfig(env: Record<string, string | undefined> = process.env): JevConfig {
-	const key = readEnv(env, "JEV_API_KEY", "TYPESAFE_API_KEY");
+export function resolveJevConfig(
+	env: Record<string, string | undefined> = process.env,
+	overrides: JevConfigOverrides = {},
+): JevConfig {
+	const overrideKey = overrides.apiKey?.trim();
+	const key =
+		overrideKey !== undefined && overrideKey.length > 0
+			? { value: overrideKey, source: CONFIG_KEY_SOURCE }
+			: readEnv(env, "JEV_API_KEY", "TYPESAFE_API_KEY");
 	if (key.value === undefined) {
-		throw new Error("pi-jev-find needs a Jev API key. Set JEV_API_KEY (or TYPESAFE_API_KEY) in your environment.");
+		throw new Error("find needs a Jev API key. Set JEV_API_KEY (or TYPESAFE_API_KEY) in the environment.");
 	}
-	const baseUrl = (readEnv(env, "JEV_BASE_URL", "TYPESAFE_BASE_URL").value ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-	const model = readEnv(env, "JEV_MODEL", "TYPESAFE_DEFAULT_MODEL").value ?? DEFAULT_MODEL;
+	const baseUrl = (overrides.baseUrl?.trim() || readEnv(env, "JEV_BASE_URL", "TYPESAFE_BASE_URL").value || DEFAULT_BASE_URL).replace(
+		/\/+$/,
+		"",
+	);
+	const model = overrides.model?.trim() || readEnv(env, "JEV_MODEL", "TYPESAFE_DEFAULT_MODEL").value || DEFAULT_MODEL;
 	return { apiKey: key.value, baseUrl, model, keySource: key.source };
 }
 

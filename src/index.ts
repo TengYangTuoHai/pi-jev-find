@@ -1,23 +1,24 @@
 /**
- * pi-jev-find extension entry: registers the `find` tool (semantic grep with a
+ * pi extension entry: registers the `find` tool (semantic search with a
  * judge-calibrated cascade) and a `/find` status command.
  *
  * The tool contract and model-facing digest are ported from oh-my-pi
- * `packages/coding-agent/src/tools/jfind/index.ts` (MIT); the judge is the
- * native Jev probability API (System One), configured purely through
- * environment variables: JEV_API_KEY / JEV_BASE_URL / JEV_MODEL.
+ * `packages/coding-agent/src/tools/jfind/index.ts` (MIT). Everything shared
+ * with the DSH adapter lives under `src/shared/`; this file owns only the pi
+ * surface: the typebox parameter schema, pi-tui renderers, the per-call usage
+ * report, and the status command.
+ *
+ * The judge is the native Jev probability API (System One), configured purely
+ * through environment variables: JEV_API_KEY / JEV_BASE_URL / JEV_MODEL.
  */
-import * as fs from "node:fs/promises";
-import type { Stats } from "node:fs";
-import * as path from "node:path";
-import { Type } from "typebox";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { runCascade } from "./cascade/cascade.ts";
-import { rankedHeat } from "./cascade/passages.ts";
+import { Type } from "typebox";
 import { loadConfig } from "./config.ts";
-import { JevJudge, resolveJevConfig } from "./judge/jev-judge.ts";
+import { resolveJevConfig } from "./judge/jev-judge.ts";
 import { renderFindCall, renderFindResult } from "./render.ts";
-import type { FindDetails, FindToolParams } from "./types.ts";
+import { type DiscoveryToolNames, FIND_PROMPT_SNIPPET, findDescription, findPromptGuidelines } from "./shared/description.ts";
+import { runFind } from "./shared/run-find.ts";
+import type { FindDetails, FindStats, FindToolParams } from "./types.ts";
 
 const parameters = Type.Object({
 	query: Type.String({
@@ -30,103 +31,25 @@ const parameters = Type.Object({
 	path: Type.Optional(Type.String({ description: "directory to search. Omitted -> the workspace root" })),
 });
 
-const DESCRIPTION = `Semantic code search: describe what you want in plain language, get the files and exact line ranges that implement it, each with a calibrated 0-1 probability. No index; searches the live workspace tree on every call. A typical find takes a few seconds and costs a fraction of a cent.
+/** pi's discovery tools: the copy tells the model to reach for these first. */
+const DISCOVERY_TOOLS: DiscoveryToolNames = { grep: "`ffgrep`/grep", glob: "`fffind`/glob" };
 
-WHEN TO USE (instead of grep):
-- The words you'd use may NOT match the code's identifiers ("where do we expire sessions?" when the code says \`sess_ttl\`), or you don't know this codebase yet.
-- One or two greps already missed or returned noise, and you would otherwise open many speculative files.
-Do NOT use it for exact strings, regexes, or known symbols (that is grep/\`ffgrep\` territory), nor for file names (\`fffind\`/glob) — those are cheaper and faster.
-
-USAGE
-- \`query\`: a concept or behavior ("where do we verify webhook signatures?", "retry budget for failed requests"), not a regex. Quoted phrases in \`query\` are matched whole.
-- \`grep_keywords\`: identifiers or terms likely to appear verbatim in matching source; they steer lexical pre-ranking. Pass \`[]\` when nothing specific comes to mind.
-- \`path\`: one directory to search; omit for the workspace root. Narrow it when you already know the subsystem.
-
-RESULTS
-- Hits are strongest first as \`path:start-end score snippet\`; open the ranges with \`read\`.
-- Scores are absolute yes/no probabilities, comparable across calls; below ~0.4 is weak evidence — reword the query instead of concluding absence.
-- Batch related questions into one descriptive \`query\` rather than several narrow calls.`;
-
-const PROMPT_SNIPPET =
-	"find: semantic search — plain-language query in, files + calibrated line ranges out; for concept lookups, unfamiliar code, or after greps miss";
-
-const PROMPT_GUIDELINES = [
-	"Exact strings, regexes, and known symbols belong to `ffgrep`/grep (or rg via bash); file names belong to `fffind`/glob.",
-	"When a grep missed or returned noise, or the concept's name in code may differ from your words, call `find` once with a descriptive query before reading files speculatively.",
-];
-
-/** Line ranges shown per hit in the model-facing text, strongest first. */
-const RANGES_SHOWN = 3;
-
-function toDisplay(rel: string, root: string, cwd: string): string {
-	const relative = path.relative(cwd, path.join(root, rel));
-	if (relative.startsWith("..")) return rel;
-	return relative.split(path.sep).join("/");
-}
-
-async function resolveRoot(rawPath: string | undefined, cwd: string): Promise<string> {
-	const input = (rawPath ?? "").trim();
-	if (input.length === 0) return path.resolve(cwd);
-	const root = path.resolve(cwd, input);
-	let stat: Stats;
-	try {
-		stat = await fs.stat(root);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`Path not found: ${input}`);
-		throw error;
-	}
-	if (!stat.isDirectory()) throw new Error(`Path is not a directory: ${input}`);
-	return root;
-}
-
-function formatBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDuration(ms: number): string {
-	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatNumber(value: number): string {
-	return value.toLocaleString("en-US");
-}
-
-function formatDigest(
-	query: string,
-	scopePath: string | undefined,
-	details: FindDetails,
-	stats: FindDetails["stats"],
-): string {
-	const where = scopePath === undefined ? "" : ` in ${scopePath}`;
-	const out: string[] = [];
-	if (details.hits.length === 0) {
-		out.push(`no hits for "${query}"${where} (τ ${details.threshold.toFixed(2)})`);
-	} else {
-		out.push(
-			`${details.hits.length} hit(s) for "${query}"${where} (τ ${details.threshold.toFixed(2)}), strongest first`,
-			"",
-		);
-		for (const hit of details.hits) {
-			const coverage = hit.truncated
-				? `${hit.linesSeen} lines judged, partial`
-				: `${hit.linesSeen} lines judged`;
-			out.push(`${hit.rel}  ${hit.contentScore.toFixed(2)}  ${coverage}`);
-			for (const range of rankedHeat(hit.ranges, RANGES_SHOWN)) {
-				const span = range.start === range.end ? String(range.start) : `${range.start}-${range.end}`;
-				out.push(`  ${hit.rel}:${span}  ${range.p.toFixed(2)}  ${range.snippet}`);
-			}
-		}
-	}
-	out.push(
-		"",
-		`listed ${stats.filesListed} · judged ${stats.judged} · read ${stats.filesRead} files (${formatBytes(stats.fileBytes)}) · ${stats.requests} requests · ${formatNumber(stats.inputTokens)} tokens · $${stats.cost.toFixed(4)} · ${formatDuration(details.elapsedMs)} wall / ${formatDuration(stats.apiMs)} api`,
-	);
-	if (stats.failures.length > 0) {
-		out.push(`${stats.errors} of ${stats.requests} requests failed:`, ...stats.failures.map(failure => `  ${failure}`));
-	}
-	return out.join("\n");
+/** pi reports provider usage per call so its cost accounting includes the judge spend. */
+function usageFromStats(stats: FindStats) {
+	return {
+		input: stats.inputTokens,
+		output: stats.outputTokens,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: stats.inputTokens + stats.outputTokens,
+		cost: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: stats.cost,
+		},
+	};
 }
 
 export default function jfindExtension(pi: ExtensionAPI): void {
@@ -145,73 +68,37 @@ export default function jfindExtension(pi: ExtensionAPI): void {
 	}
 
 	if (judgeReady) {
-	pi.registerTool({
-		name: "find",
-		label: "Find",
-		description: DESCRIPTION,
-		promptSnippet: PROMPT_SNIPPET,
-		promptGuidelines: PROMPT_GUIDELINES,
-		parameters,
-		async execute(_toolCallId, params: FindToolParams, signal, onUpdate, ctx) {
-			const query = params.query.trim();
-			if (query.length === 0) throw new Error("`query` must be a non-empty description");
-			const root = await resolveRoot(params.path, ctx.cwd);
-			const scopePath =
-				root === path.resolve(ctx.cwd)
-					? undefined
-					: `${path.relative(ctx.cwd, root).split(path.sep).join("/")}/`;
-			const jev = resolveJevConfig();
-			const judge = new JevJudge(jev);
-			const started = performance.now();
-			const result = await runCascade({
-				root,
-				query,
-				extraKeywords: params.grep_keywords,
-				judge,
-				includeHidden: false,
-				budgets: config.budgets,
-				signal,
-				onProgress: message =>
-					onUpdate?.({ content: [{ type: "text", text: message }] } as AgentToolResult<FindDetails>),
-			});
-			const elapsedMs = performance.now() - started;
-			const { stats, threshold, keywords } = result;
-			const hits = result.hits.map(hit => ({ ...hit, rel: toDisplay(hit.rel, root, ctx.cwd) }));
-			const details: FindDetails = { query, keywords, threshold, hits, stats, elapsedMs, cwd: ctx.cwd, scopePath };
-			const digest = formatDigest(query, scopePath, details, stats);
-			if (stats.requests > 0 && stats.errors === stats.requests) {
-				throw new Error(
-					`find failed — all ${stats.requests} judge requests failed:\n${stats.failures.join("\n") || "unknown errors"}`,
-				);
-			}
-			return {
-				content: [{ type: "text", text: digest }],
-				details,
-				usage: {
-					input: stats.inputTokens,
-					output: stats.outputTokens,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: stats.inputTokens + stats.outputTokens,
-					cost: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						total: stats.cost,
-					},
-				},
-			};
-		},
-		renderCall(args, theme) {
-			return renderFindCall(args, theme);
-		},
-		renderResult(result, options, theme) {
-			const details = result.details as FindDetails | undefined;
-			const isError = (result as { isError?: boolean }).isError === true;
-			return renderFindResult(details, isError, options.expanded, theme);
-		},
-	});
+		pi.registerTool({
+			name: "find",
+			label: "Find",
+			description: findDescription(DISCOVERY_TOOLS),
+			promptSnippet: FIND_PROMPT_SNIPPET,
+			promptGuidelines: findPromptGuidelines(DISCOVERY_TOOLS),
+			parameters,
+			async execute(_toolCallId, params: FindToolParams, signal, onUpdate, ctx) {
+				const { details, digest } = await runFind({
+					cwd: ctx.cwd,
+					params,
+					budgets: config.budgets,
+					signal,
+					onProgress: message =>
+						onUpdate?.({ content: [{ type: "text", text: message }] } as AgentToolResult<FindDetails>),
+				});
+				return {
+					content: [{ type: "text", text: digest }],
+					details,
+					usage: usageFromStats(details.stats),
+				};
+			},
+			renderCall(args, theme) {
+				return renderFindCall(args, theme);
+			},
+			renderResult(result, options, theme) {
+				const details = result.details as FindDetails | undefined;
+				const isError = (result as { isError?: boolean }).isError === true;
+				return renderFindResult(details, isError, options.expanded, theme);
+			},
+		});
 	}
 
 	// Always available as a status/diagnostic command, even without a key.

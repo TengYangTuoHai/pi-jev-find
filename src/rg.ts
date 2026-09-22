@@ -3,6 +3,10 @@
  * pi-jev-find replacement for omp's `@oh-my-pi/pi-natives` grep/glob (MIT,
  * oh-my-pi). `rg` is the same engine both projects ultimately rely on.
  *
+ * Binary resolution prefers the packaged `@vscode/ripgrep` build (the DeepSeek
+ * Harness ships one, so no system install is required) and falls back to `rg`
+ * on `PATH`. `JF_RG` overrides both, for a custom build.
+ *
  * Hardening: `RIPGREP_CONFIG_PATH` is cleared so a user config cannot inject
  * flags that break the `--json`/`--files` contracts; runs are killed on abort
  * signal or timeout; stderr is capped.
@@ -10,6 +14,30 @@
 import { spawn } from "node:child_process";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** Environment variable naming an explicit ripgrep binary. */
+const RG_OVERRIDE_ENV = "JF_RG";
+
+let binaryPromise: Promise<string> | undefined;
+
+/**
+ * Resolve the ripgrep binary once per process: `JF_RG`, then the packaged
+ * `@vscode/ripgrep` build, then `rg` on `PATH`.
+ * @returns the command `spawn` runs (an absolute path for the first two sources).
+ */
+function rgBinary(): Promise<string> {
+	binaryPromise ??= (async () => {
+		const override = process.env[RG_OVERRIDE_ENV]?.trim();
+		if (override !== undefined && override.length > 0) return override;
+		try {
+			const packaged = (await import("@vscode/ripgrep")) as { rgPath?: string };
+			if (typeof packaged.rgPath === "string" && packaged.rgPath.length > 0) return packaged.rgPath;
+		} catch {
+			// The packaged binary is absent — fall through to the PATH lookup.
+		}
+		return "rg";
+	})();
+	return binaryPromise;
+}
 
 export type RgFailure = "missing" | "failed" | "timeout" | "aborted";
 
@@ -36,13 +64,14 @@ export interface RgOptions {
 }
 
 /**
- * Run `rg` in `root` and collect stdout. Rejects with {@link RgError}:
- * `missing` when rg is not on PATH, `failed` on exit code > 1 (rg: 2), and
- * `timeout`/`aborted` when the run was killed.
+ * Run ripgrep in `root` and collect stdout. Rejects with {@link RgError}:
+ * `missing` when no ripgrep binary could be resolved or launched, `failed` on
+ * exit code > 1 (rg: 2), and `timeout`/`aborted` when the run was killed.
  */
 export async function runRg(root: string, args: readonly string[], options: RgOptions = {}): Promise<RgRun> {
 	if (options.signal?.aborted) throw new RgError("aborted", "aborted");
-	const child = spawn("rg", args, {
+	const command = await rgBinary();
+	const child = spawn(command, args, {
 		cwd: root,
 		stdio: ["ignore", "pipe", "pipe"],
 		env: { ...process.env, RIPGREP_CONFIG_PATH: "" },
@@ -59,7 +88,12 @@ export async function runRg(root: string, args: readonly string[], options: RgOp
 	child.once("error", error => {
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT") {
-			closed.reject(new RgError("missing", "ripgrep (rg) is required but was not found on PATH"));
+			closed.reject(
+				new RgError(
+					"missing",
+					`ripgrep not found: ${RG_OVERRIDE_ENV} is unset, the packaged @vscode/ripgrep binary is unavailable, and no rg is on PATH`,
+				),
+			);
 		} else {
 			closed.reject(new RgError("failed", `rg failed to start: ${error.message}`));
 		}
