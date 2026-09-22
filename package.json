@@ -1,0 +1,42 @@
+{
+	"name": "pi-jev-find",
+	"version": "0.1.0",
+	"description": "Semantic find tool for the pi coding agent — a cascade-search port of jegrep / oh-my-pi jfind",
+	"type": "module",
+	"license": "MIT",
+	"main": "src/index.ts",
+	"files": [
+		"src",
+		"LICENSE",
+		"README.md"
+	],
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"semantic-search",
+		"ripgrep",
+		"jev",
+		"typesafe",
+		"code-search"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/TengYangTuoHai/pi-jev-find.git"
+	},
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"typebox": "^1.3.27"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^0.87.0",
+		"@earendil-works/pi-tui": "^0.87.0",
+		"@types/bun": "^1.3.0",
+		"typescript": "^5.9.0"
+	},
+	"pi": {
+		"extensions": ["src/index.ts"]
+	}
+}
